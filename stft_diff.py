@@ -51,7 +51,12 @@ def compute_stft(y, sr, n_fft, hop_length, backend='librosa'):
     elif backend == 'torch':
         import torch
         import torchaudio
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif torch.mps.is_available():
+            device = torch.device('mps')
+        else:
+            device = torch.device('cpu')
         y_tensor = torch.from_numpy(y).float().to(device)
         stft = torch.stft(y_tensor, n_fft=n_fft, hop_length=hop_length,
                           window=torch.hann_window(n_fft).to(device),

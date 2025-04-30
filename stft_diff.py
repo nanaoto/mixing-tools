@@ -6,8 +6,43 @@ import argparse
 import os
 import sys
 import warnings
-from matplotlib.colors import TwoSlopeNorm
+import platform
+from matplotlib import font_manager
 
+def set_chinese_font():
+    """根据操作系统自动设置中文字体"""
+    system = platform.system()
+
+    try:
+        if system == 'Windows':
+            # Windows系统字体
+            font_path = 'C:/Windows/Fonts/simhei.ttf'  # 黑体
+            font_manager.fontManager.addfont(font_path)
+            plt.rcParams['font.family'] = 'SimHei'
+        elif system == 'Darwin':
+            # Mac系统字体
+            font_path = '/System/Library/Fonts/PingFang.ttc'  # 苹方
+            font_manager.fontManager.addfont(font_path)
+            plt.rcParams['font.family'] = 'PingFang SC'
+        else:
+            # Linux系统字体
+            font_path = '/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc'  # 文泉驿正黑
+            font_manager.fontManager.addfont(font_path)
+            plt.rcParams['font.family'] = 'WenQuanYi Zen Hei'
+
+        # 解决负号显示问题
+        plt.rcParams['axes.unicode_minus'] = False
+        return True
+    except Exception as e:
+        print(f"字体设置失败: {e}")
+        # 回退到Matplotlib默认支持的中文字体
+        try:
+            plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # 尝试Mac默认
+            plt.rcParams['axes.unicode_minus'] = False
+            return True
+        except:
+            print("无法设置任何中文字体，将显示为方框")
+            return False
 
 def parse_args():
     """Parse command line arguments"""
@@ -106,20 +141,40 @@ def plot_spectrogram(ax, stft_db, sr, hop_length, title, cmap='CMRmap'):
     return img
 
 
-def plot_difference(ax, diff_db, sr, hop_length, threshold, title):
-    """Plot difference spectrogram with frequency in kHz and time in min:sec"""
+def plot_difference(ax, diff_db, sr, hop_length, threshold, title, mode='both'):
+    """Plot difference spectrogram with frequency in kHz and time in min:sec
+
+    Parameters:
+        mode: 'both' (show both positive and negative), 'positive' (only positive), 'negative' (only negative)
+    """
     times = librosa.times_like(diff_db, sr=sr, hop_length=hop_length)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=args.n_fft) / 1000  # Convert to kHz
 
-    cmap = plt.get_cmap('berlin').copy()
+    cmap = plt.get_cmap('pink').copy()
     cmap.set_bad(color='black')
-    diff_db_masked = np.where(np.abs(diff_db) < threshold, np.nan, diff_db)
+
+    # Apply threshold and mask based on mode
+    if mode == 'positive':
+        diff_db_masked = np.where(diff_db < threshold, np.nan, diff_db)
+        vmin = threshold
+        vmax = 20
+    elif mode == 'negative':
+        cmap = plt.get_cmap('gnuplot_r').copy()
+        cmap.set_bad(color='black')
+        diff_db_masked = np.where(diff_db > -threshold, np.nan, diff_db)
+        vmin = -20
+        vmax = -threshold
+    else:  # both
+        cmap = plt.get_cmap('vanimo').copy()
+        cmap.set_bad(color='black')
+        diff_db_masked = np.where(np.abs(diff_db) < threshold, np.nan, diff_db)
+        vmin = -20
+        vmax = 20
 
     img = ax.imshow(diff_db_masked, aspect='auto', origin='lower',
                     extent=[times[0], times[-1], freqs[0], freqs[-1]],
                     cmap=cmap,
-                    # vmin=-20, vmax=20
-                    )
+                    vmin=vmin, vmax=vmax)
 
     # Format frequency axis (kHz)
     ax.set_yticks(np.arange(0, freqs[-1], 2))
@@ -153,8 +208,8 @@ def compare_spectrograms(args):
         # Compute difference
         diff_db = stft2_db - stft1_db
 
-        # Create figure
-        fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+        # Create figure - now with 4 rows instead of 3
+        fig, axes = plt.subplots(4, 1, figsize=(12, 16))
         fig.suptitle(f"Spectral Comparison (n_fft={args.n_fft}, hop={args.hop_length})", y=1.02)
 
         # Plot first spectrogram
@@ -165,14 +220,21 @@ def compare_spectrograms(args):
         img2 = plot_spectrogram(axes[1], stft2_db, sr, args.hop_length,
                                 f"Spectrogram: {os.path.basename(args.file2)}")
 
-        # Plot difference
+        # Plot positive differences (increases)
         img3 = plot_difference(axes[2], diff_db, sr, args.hop_length, args.threshold,
-                               f"Change from {os.path.basename(args.file1)} to {os.path.basename(args.file2)}\n(black: <{args.threshold}dB)")
+                               f"Increases from {os.path.basename(args.file1)} to {os.path.basename(args.file2)}\n(black: <{args.threshold}dB)",
+                               mode='positive')
+
+        # Plot negative differences (decreases)
+        img4 = plot_difference(axes[3], diff_db, sr, args.hop_length, args.threshold,
+                               f"Decreases from {os.path.basename(args.file1)} to {os.path.basename(args.file2)}\n(black: <{args.threshold}dB)",
+                               mode='negative')
 
         # Add colorbars
         fig.colorbar(img1, ax=axes[0], format='%+2.0f dB', label='Magnitude (dB)')
         fig.colorbar(img2, ax=axes[1], format='%+2.0f dB', label='Magnitude (dB)')
-        fig.colorbar(img3, ax=axes[2], format='%+2.0f dB', label='Difference (dB)')
+        fig.colorbar(img3, ax=axes[2], format='%+2.0f dB', label='Increase (dB)')
+        fig.colorbar(img4, ax=axes[3], format='%+2.0f dB', label='Decrease (dB)')
 
         plt.tight_layout()
         plt.savefig(args.output, dpi=300, bbox_inches='tight')
@@ -185,6 +247,10 @@ def compare_spectrograms(args):
 
 if __name__ == '__main__':
     args = parse_args()
+    if set_chinese_font():
+        print("中文字体设置成功")
+    else:
+        print("无法设置中文字体")
 
     # Check backend dependencies
     if args.backend == 'torch':
